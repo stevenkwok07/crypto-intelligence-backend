@@ -5,7 +5,7 @@ from services.analyzer import analyze_coin
 from services.scanner import scan_coins
 from config import settings
 
-app = FastAPI(title="Crypto Intelligence API", version="1.0.0")
+app = FastAPI(title="Crypto Intelligence API", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,7 +17,12 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "1.0.0", "project": "crypto-intelligence"}
+    return {
+        "status": "ok",
+        "version": "1.1.0",
+        "project": "crypto-intelligence",
+        "features": {"multi_asset_scan": "kraken-research-v1"},
+    }
 
 @app.get("/api/market/overview")
 async def market_overview():
@@ -37,5 +42,5 @@ async def coin_analysis(coin_id: str):
         raise HTTPException(status_code=502, detail=f"Data provider error: {exc}")
 
 @app.get("/api/scan")
-async def scan(limit: int = Query(30, ge=1, le=100)):
+async def scan(limit: int = Query(10, ge=1, le=10)):
     return await scan_coins(limit=limit)
