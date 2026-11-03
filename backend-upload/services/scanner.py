@@ -39,11 +39,16 @@ async def scan_coins(limit=10):
         if item.get("technical_score") is not None else -1,
         reverse=True,
     )
-    candidates = [
-        item for item in results
-        if item.get("recommendation", {}).get("status") == "PROVISIONAL"
-        and item.get("recommendation", {}).get("research_setup") == "LONG_CANDIDATE"
-    ]
+    candidates = []
+    for item in results:
+        recommendation = item.get("recommendation")
+        if not isinstance(recommendation, dict):
+            continue
+        if (
+            recommendation.get("status") == "PROVISIONAL"
+            and recommendation.get("research_setup") == "LONG_CANDIDATE"
+        ):
+            candidates.append(item)
     allocation = build_simulated_allocation(results)
     return {
         "count": len(results),
