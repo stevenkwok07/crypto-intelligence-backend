@@ -41,16 +41,17 @@ def bullish_analysis():
 
 
 class MultiTimeframeRecommendationTests(unittest.TestCase):
-    def test_full_alignment_yields_long_candidate_but_withholds_live_recommendation(self):
+    def test_full_alignment_yields_provisional_candidate_despite_missing_backtest(self):
         result = build_multi_timeframe_recommendation(bullish_analysis())
 
         self.assertEqual(result["macro_regime_1D"], "BULLISH")
         self.assertEqual(result["primary_direction_4H"], "BULLISH")
         self.assertEqual(result["confirmation_1H"], "CONFIRMED")
         self.assertEqual(result["research_setup"], "LONG_CANDIDATE")
-        self.assertEqual(result["status"], "WITHHELD")
+        self.assertEqual(result["status"], "PROVISIONAL")
+        self.assertTrue(result["eligible_for_simulated_allocation"])
         self.assertFalse(result["eligible_for_automatic_allocation"])
-        self.assertTrue(any("backtest" in reason for reason in result["withheld_reasons"]))
+        self.assertTrue(any("backtest" in reason for reason in result["limitations"]))
 
     def test_daily_bear_market_blocks_bullish_four_hour_setup(self):
         analyses = bullish_analysis()
@@ -88,7 +89,7 @@ class MultiTimeframeRecommendationTests(unittest.TestCase):
             bullish_analysis(), backtest_validated=True, market_quality_validated=True
         )
 
-        self.assertEqual(result["status"], "REVIEW_REQUIRED")
+        self.assertEqual(result["status"], "PROVISIONAL")
         self.assertFalse(result["eligible_for_automatic_allocation"])
 
     def test_bad_candle_quality_still_shows_simulation_but_withholds_recommendation(self):
@@ -153,3 +154,4 @@ class MultiTimeframeRecommendationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

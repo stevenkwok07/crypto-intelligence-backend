@@ -36,14 +36,35 @@ class MarketServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["assets"][0]["price_usd"], 10)
         self.assertIsNone(result["assets"][1]["price_usd"])
 
-    async def test_scanner_is_an_universe_preview(self):
-        universe = {"count": 1, "assets": [{"id": "btc-bitcoin"}]}
-        with patch("services.scanner.get_coin_universe", new_callable=AsyncMock, return_value=universe) as get_universe:
+    async def test_scanner_analyzes_and_ranks_assets_but_withholds_allocations(self):
+        assets = [
+            {"id": "btc-bitcoin", "symbol": "BTC"},
+            {"id": "eth-ethereum", "symbol": "ETH"},
+        ]
+        universe = {"count": 2, "assets": assets}
+        analysis = {
+            "technical_score": 72,
+            "classification": "BULLISH",
+            "status": "PROVISIONAL_MULTI_TIMEFRAME",
+            "recommendation": {
+                "status": "PROVISIONAL",
+                "research_setup": "LONG_CANDIDATE",
+                "timeframe_data_quality": {"1D": "OK", "4H": "OK", "1H": "OK"},
+                "volatility_context_4H": {"atr_pct": 1.2},
+            },
+        }
+        with (
+            patch("services.scanner.get_coin_universe", new_callable=AsyncMock, return_value=universe) as get_universe,
+            patch("services.scanner.analyze_coin", new_callable=AsyncMock, return_value=analysis),
+        ):
             result = await scanner.scan_coins(limit=7)
 
         get_universe.assert_awaited_once_with(7)
-        self.assertEqual(result["status"], "UNIVERSE_ONLY")
-        self.assertEqual(result["assets"], universe["assets"])
+        self.assertEqual(result["status"], "RESEARCH_SCAN")
+        self.assertEqual(result["assets"][0]["asset"], assets[0])
+        self.assertEqual(result["research_candidates"], 2)
+        self.assertEqual(result["system_recommendation"]["status"], "PROVISIONAL_SIMULATION")
+        self.assertLessEqual(result["system_recommendation"]["deployed_pct"], 50)
 
 
 class ProviderWrapperTests(unittest.IsolatedAsyncioTestCase):
@@ -146,3 +167,4 @@ class ProviderWrapperTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

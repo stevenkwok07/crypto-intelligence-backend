@@ -1,7 +1,7 @@
-"""Explainable multi-timeframe spot setup screening.
+"""Explainable multi-timeframe spot setup screening for provisional simulations.
 
-This module identifies research scenarios only. It does not estimate returns,
-set portfolio weights, or authorize orders.
+This module identifies technical research scenarios, not returns or probabilities.
+Portfolio weights are computed separately and never authorize orders.
 """
 from math import isfinite
 
@@ -150,15 +150,23 @@ def build_multi_timeframe_recommendation(
         withheld_reasons.append("Satu atau lebih timeframe tidak tersedia atau belum cukup candle.")
     if not quality_ok:
         withheld_reasons.append("Kualitas candle belum berstatus OK di seluruh timeframe.")
+    if not complete or not quality_ok:
+        recommendation_status = "WITHHELD"
+    elif setup == "LONG_CANDIDATE":
+        recommendation_status = "PROVISIONAL"
+    else:
+        recommendation_status = "NO_SETUP"
+
+    limitations = []
     if not backtest_validated:
-        withheld_reasons.append("Aturan ini belum lulus backtest out-of-sample dengan biaya dan slippage.")
+        limitations.append("Aturan ini belum lulus backtest out-of-sample dengan biaya dan slippage.")
     if not market_quality_validated:
-        withheld_reasons.append("Spread, depth order book, dan likuiditas belum divalidasi.")
-    recommendation_status = "WITHHELD" if withheld_reasons else "REVIEW_REQUIRED"
+        limitations.append("Spread, depth order book, dan likuiditas belum divalidasi.")
 
     return {
         "status": recommendation_status,
         "research_setup": setup,
+        "eligible_for_simulated_allocation": recommendation_status == "PROVISIONAL",
         "eligible_for_automatic_allocation": False,
         "roles": {"1D": "macro_filter", "4H": "primary_setup", "1H": "confirmation"},
         "macro_regime_1D": macro,
@@ -172,5 +180,7 @@ def build_multi_timeframe_recommendation(
             "note": "ATR dan BBW memberi konteks volatilitas; belum digunakan sebagai klaim arah atau target harga.",
         },
         "withheld_reasons": withheld_reasons,
-        "method_note": "Long-only spot screening. Technical scores are heuristics, not probabilities. A candidate is a scenario for review, not a buy instruction.",
+        "limitations": limitations,
+        "method_note": "Simulasi long-only spot sementara. Skor teknikal adalah heuristik, bukan probabilitas. Nominal bukan instruksi transaksi dan strategi belum tervalidasi.",
     }
+

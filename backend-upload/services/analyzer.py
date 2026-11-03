@@ -4,7 +4,7 @@ import asyncio
 import pandas as pd
 
 from providers.coinpaprika import get_coin
-from providers.binance import get_klines
+from providers.kraken import get_klines
 from indicators.core import add_indicators
 from engine.market_structure import analyze_market_structure
 from engine.divergence import detect_macd_divergence
@@ -37,7 +37,7 @@ def binance_rows_to_df(rows, interval="1h"):
     numeric = ["open", "high", "low", "close", "volume"]
     for col in numeric:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    # Binance includes the currently-forming candle. Exclude it to avoid look-ahead.
+    # Exclude the currently-forming candle to avoid look-ahead.
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     df["close_time"] = pd.to_numeric(df["close_time"], errors="coerce")
     df = df[df["close_time"] < now_ms]
@@ -177,10 +177,10 @@ async def analyze_coin(coin_id: str):
     coin = await get_coin(coin_id)
     symbol = str(coin.get("symbol", "")).upper()
     if not symbol or not symbol.isalnum():
-        raise ValueError(f"Invalid asset symbol for Binance mapping: {symbol!r}")
+        raise ValueError(f"Invalid asset symbol for Kraken market mapping: {symbol!r}")
     pair = f"{symbol}USDT"
 
-    # Pull all three timeframes from Binance public spot market data.
+    # Kraken Spot public OHLC is the primary source; no exchange credentials needed.
     results = await asyncio.gather(
         get_klines(pair, "1d", 500),
         get_klines(pair, "4h", 500),
@@ -206,10 +206,10 @@ async def analyze_coin(coin_id: str):
     if not ready:
         return {
             "asset": {"id": coin_id, "name": coin.get("name"), "symbol": symbol},
-            "binance_symbol": pair,
+            "asset_symbol": symbol,
             "classification": "INSUFFICIENT_DATA",
             "status": "MULTI_TIMEFRAME_INCOMPLETE",
-            "source": "Binance Spot + CoinPaprika metadata",
+            "source": "Kraken Spot + CoinPaprika metadata",
             "timeframes": analyses,
             "note": "A timeframe is missing, unavailable, or has fewer than 220 closed candles. No combined score is issued.",
         }
@@ -230,7 +230,7 @@ async def analyze_coin(coin_id: str):
 
     return {
         "asset": {"id": coin_id, "name": coin.get("name"), "symbol": symbol},
-        "binance_symbol": pair,
+        "asset_symbol": symbol,
         "timeframe_role": {"1D": "macro_filter", "4H": "primary_swing_score", "1H": "confirmation"},
         "technical_score": combined,
         "classification": classify(combined),
@@ -244,9 +244,10 @@ async def analyze_coin(coin_id: str):
             "note": "Spread, order-book depth and cross-exchange liquidity are not included in this score.",
         },
         "data_quality": {
-            "source": "Binance Spot klines; CoinPaprika asset metadata",
+            "source": "Kraken Spot OHLC; CoinPaprika asset metadata",
             "closed_candles_only": True,
             "confidence": "LOW",
             "note": "Provisional technical model. Market structure is heuristic; confirmed MACD divergence, market-quality scoring, backtesting, fees and slippage validation are not yet implemented.",
         },
     }
+
