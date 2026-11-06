@@ -1,57 +1,47 @@
 """Small, explicitly provisional spot portfolio simulation."""
 
 
-TIER_CAP_FACTOR = {"LONG_CANDIDATE": 1.0, "LONG_CANDIDATE_REDUCED": 0.5}
+def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=30.0, per_asset_cap_pct=10.0):
+    """Allocate only among clean candlestick candidates; leave the rest in cash.
 
-
-def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, per_asset_cap_pct=20.0):
-    """Allocate only among clean candidates; leave the rest in cash.
-
-    Full-tier candidates (strict 1D/4H/1H rules) may take up to per_asset_cap_pct.
-    Reduced-tier candidates (1D sideways allowed, neutral 4H structure, 3/4 1H checks)
-    are capped at half of that.
-
-    Weights use a simple heuristic: technical strength divided by 4H ATR percent.
-    The score is not a probability and this sizing rule is not backtested.
+    Weights use a simple heuristic: 4H pattern strength divided by 4H ATR percent,
+    so stronger patterns get more and more volatile assets get less.
+    This sizing rule is not backtested.
     """
     candidates = []
     for item in scan_assets:
         recommendation = item.get("recommendation") or {}
         quality = recommendation.get("timeframe_data_quality") or {}
-        setup = recommendation.get("research_setup")
         if (
-            setup not in TIER_CAP_FACTOR
+            recommendation.get("research_setup") != "LONG_CANDIDATE"
             or recommendation.get("status") != "PROVISIONAL"
-            or any(quality.get(tf) != "OK" for tf in ("1D", "4H", "1H"))
+            or any(quality.get(tf) != "OK" for tf in ("4H", "1H"))
         ):
             continue
-        score = item.get("technical_score")
         atr_pct = (recommendation.get("volatility_context_4H") or {}).get("atr_pct")
         try:
-            score = float(score)
+            strength = float(recommendation.get("pattern_strength_4H") or 0)
             atr_pct = float(atr_pct)
         except (TypeError, ValueError):
             continue
-        if score < 65 or atr_pct <= 0:
+        if strength <= 0 or atr_pct <= 0:
             continue
         asset = item.get("asset") or {}
         symbol = str(asset.get("symbol") or "").strip().upper()
         if not symbol:
             continue
+        score = item.get("technical_score")
         candidates.append({
             "symbol": symbol,
             "name": asset.get("name"),
-            "technical_score": round(score, 2),
+            "pattern_strength_4h": strength,
+            "technical_score": round(float(score), 2) if isinstance(score, (int, float)) else None,
             "atr_pct_4h": round(atr_pct, 4),
-            "raw_weight": max(score - 60.0, 1.0) / atr_pct,
-            "tier": "FULL" if setup == "LONG_CANDIDATE" else "REDUCED",
-            "cap": float(per_asset_cap_pct) * TIER_CAP_FACTOR[setup],
+            "patterns_4h": [p.get("name") for p in (recommendation.get("patterns") or {}).get("4H", []) if p.get("direction") == "BULLISH"],
+            "raw_weight": strength / atr_pct,
         })
 
-    candidates.sort(
-        key=lambda item: (item["tier"] == "FULL", item["technical_score"], item["raw_weight"]),
-        reverse=True,
-    )
+    candidates.sort(key=lambda item: (item["pattern_strength_4h"], item["raw_weight"]), reverse=True)
     candidates = candidates[:max_assets]
     if not candidates:
         return {
@@ -59,10 +49,11 @@ def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, pe
             "allocations": [],
             "deployed_pct": 0.0,
             "cash_pct": 100.0,
-            "withheld_reasons": ["Belum ada setup long dengan data 1D/4H/1H bersih yang lolos aturan penuh maupun reduced."],
+            "withheld_reasons": ["Belum ada koin dengan pola candlestick bullish 4H yang terkonfirmasi candle 1H."],
         }
 
-    target = min(float(total_cap_pct), sum(item["cap"] for item in candidates))
+    cap = float(per_asset_cap_pct)
+    target = min(float(total_cap_pct), cap * len(candidates))
     remaining = target
     open_symbols = {item["symbol"]: item for item in candidates}
     weights = {item["symbol"]: 0.0 for item in candidates}
@@ -71,7 +62,7 @@ def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, pe
         capped = []
         for symbol, item in open_symbols.items():
             proposed = remaining * item["raw_weight"] / raw_total
-            room = item["cap"] - weights[symbol]
+            room = cap - weights[symbol]
             if proposed >= room - 1e-9:
                 weights[symbol] += room
                 remaining -= room
@@ -89,9 +80,10 @@ def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, pe
             "symbol": item["symbol"],
             "name": item["name"],
             "weight_pct": round(weights[item["symbol"]], 2),
+            "pattern_strength_4h": item["pattern_strength_4h"],
+            "patterns_4h": item["patterns_4h"],
             "technical_score": item["technical_score"],
             "atr_pct_4h": item["atr_pct_4h"],
-            "tier": item["tier"],
             "status": "SIMULATION_ONLY",
         }
         for item in candidates if weights[item["symbol"]] > 0
@@ -102,11 +94,10 @@ def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, pe
         "allocations": allocations,
         "deployed_pct": deployed,
         "cash_pct": round(100.0 - deployed, 2),
-        "method_note": "Simulasi teknikal, bukan probabilitas atau strategi tervalidasi. Maksimal 50% modal masuk crypto, maksimal 20% per aset (10% untuk setup tier reduced: 1D sideways / struktur 4H netral / 1H 3 dari 4); sisanya tetap cash. Bobot relatif memakai (skor teknikal - 60) / ATR 4H.",
+        "method_note": "Simulasi berbasis pola candlestick (setup 4H, konfirmasi 1H), bukan probabilitas atau strategi tervalidasi. Maksimal 30% modal masuk crypto, maksimal 10% per aset; sisanya tetap cash. Bobot relatif memakai kekuatan pola 4H / ATR 4H.",
         "limitations": [
-            "Skor teknikal bukan probabilitas keberhasilan.",
+            "Pola candlestick adalah heuristik dan sering gagal tanpa konteks tren.",
             "Aturan bobot belum diuji out-of-sample setelah biaya dan slippage.",
             "Likuiditas dan kecocokan dengan situasi keuangan pribadi belum dinilai.",
         ],
     }
-

@@ -80,6 +80,7 @@ class MarketServiceTests(unittest.IsolatedAsyncioTestCase):
             "recommendation": {
                 "status": "PROVISIONAL",
                 "research_setup": "LONG_CANDIDATE",
+                "pattern_strength_4H": 2,
                 "timeframe_data_quality": {"1D": "OK", "4H": "OK", "1H": "OK"},
                 "volatility_context_4H": {"atr_pct": 1.2},
             },
@@ -103,11 +104,12 @@ class MarketServiceTests(unittest.IsolatedAsyncioTestCase):
             {"id": "usdt-tether", "symbol": "USDT"},
             {"id": "eth-ethereum", "symbol": "ETH"},
             {"id": "usdc-usd-coin", "symbol": "USDC"},
+            {"id": "steth-lido-staked-ether", "symbol": "STETH"},
             {"id": "sol-solana", "symbol": "SOL"},
         ]
         analysis = {"technical_score": 50, "recommendation": {"status": "NO_SETUP"}}
         with (
-            patch("services.scanner.get_coin_universe", new_callable=AsyncMock, return_value={"count": 5, "assets": assets}),
+            patch("services.scanner.get_coin_universe", new_callable=AsyncMock, return_value={"count": 6, "assets": assets}),
             patch("services.scanner.analyze_coin", new_callable=AsyncMock, return_value=analysis),
         ):
             result = await scanner.scan_coins(limit=3)

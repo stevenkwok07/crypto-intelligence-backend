@@ -6,135 +6,99 @@ from engine.divergence import detect_macd_divergence
 from engine.recommendations import build_multi_timeframe_recommendation
 
 
+def pattern(name, direction, strength, ago):
+    return {"name": name, "direction": direction, "strength": strength, "candles_ago": ago, "timestamp": None}
+
+
 def bullish_analysis():
     return {
         "1D": {
             "status": "PROVISIONAL",
             "data_quality": {"status": "OK"},
             "indicators": {"close": 110, "ema50": 105, "ema200": 100},
-            "market_structure": {"trend": "BULLISH"},
+            "market_structure": {"trend": "MIXED"},
         },
         "4H": {
             "status": "PROVISIONAL",
             "data_quality": {"status": "OK"},
-            "technical_score": 70,
-            "indicators": {
-                "close": 110, "ema20": 108, "ema50": 105, "ema200": 100,
-                "rsi14": 60, "macd": 2, "macd_signal": 1,
-                "macd_hist": 1, "previous_macd_hist": 0.5,
-                "relative_volume": 1.1, "atr_pct": 1.2, "bbw": 0.05,
+            "technical_score": 40,
+            "indicators": {"atr_pct": 1.2, "bbw": 0.05},
+            "candlestick": {
+                "patterns": [pattern("Bullish Engulfing", "BULLISH", 2, 1)],
+                "last_candle": {"bullish": True, "close_above_previous": True},
             },
-            "market_structure": {"trend": "BULLISH", "event_bias": "BULLISH"},
-            "volume_analysis": {"directional_pressure": "BUYING_PRESSURE"},
-            "macd_divergence": {"direction": "NONE"},
         },
         "1H": {
             "status": "PROVISIONAL",
             "data_quality": {"status": "OK"},
-            "indicators": {
-                "ema20": 104, "ema50": 102, "rsi14": 55,
-                "macd_hist": 0.3, "previous_macd_hist": 0.2,
-                "relative_volume": 0.9,
+            "candlestick": {
+                "patterns": [],
+                "last_candle": {"bullish": True, "close_above_previous": True},
             },
         },
     }
 
 
-class MultiTimeframeRecommendationTests(unittest.TestCase):
-    def test_full_alignment_yields_provisional_candidate_despite_missing_backtest(self):
+class CandlestickRecommendationTests(unittest.TestCase):
+    def test_bullish_4h_pattern_confirmed_by_1h_is_candidate_regardless_of_indicators(self):
         result = build_multi_timeframe_recommendation(bullish_analysis())
 
-        self.assertEqual(result["macro_regime_1D"], "BULLISH")
+        self.assertEqual(result["method"], "CANDLESTICK_4H_1H")
         self.assertEqual(result["primary_direction_4H"], "BULLISH")
         self.assertEqual(result["confirmation_1H"], "CONFIRMED")
         self.assertEqual(result["research_setup"], "LONG_CANDIDATE")
         self.assertEqual(result["status"], "PROVISIONAL")
+        self.assertEqual(result["pattern_strength_4H"], 2)
         self.assertTrue(result["eligible_for_simulated_allocation"])
         self.assertFalse(result["eligible_for_automatic_allocation"])
-        self.assertTrue(any("backtest" in reason for reason in result["limitations"]))
 
-    def test_daily_bear_market_blocks_bullish_four_hour_setup(self):
+    def test_old_4h_pattern_outside_window_is_ignored(self):
         analyses = bullish_analysis()
-        analyses["1D"]["indicators"].update({"close": 80, "ema50": 90, "ema200": 100})
-        analyses["1D"]["market_structure"]["trend"] = "BEARISH"
+        analyses["4H"]["candlestick"]["patterns"] = [pattern("Hammer", "BULLISH", 1, 5)]
 
         result = build_multi_timeframe_recommendation(analyses)
 
-        self.assertEqual(result["macro_regime_1D"], "BEARISH")
-        self.assertEqual(result["primary_direction_4H"], "BULLISH")
-        self.assertEqual(result["research_setup"], "WAIT_MACRO_CONFLICT")
+        self.assertEqual(result["research_setup"], "NO_PATTERN")
+        self.assertEqual(result["status"], "NO_SETUP")
 
-    def test_unconfirmed_hourly_momentum_only_generates_watch(self):
+    def test_newer_bearish_4h_pattern_blocks_long(self):
         analyses = bullish_analysis()
-        analyses["1H"]["indicators"]["ema20"] = 100
-        analyses["1H"]["indicators"]["rsi14"] = 45
+        analyses["4H"]["candlestick"]["patterns"].append(pattern("Shooting Star", "BEARISH", 1, 0))
+
+        result = build_multi_timeframe_recommendation(analyses)
+
+        self.assertEqual(result["primary_direction_4H"], "BEARISH")
+        self.assertEqual(result["research_setup"], "NO_LONG_SETUP")
+
+    def test_unconfirmed_1h_gives_watch(self):
+        analyses = bullish_analysis()
+        analyses["1H"]["candlestick"]["last_candle"] = {"bullish": False, "close_above_previous": False}
 
         result = build_multi_timeframe_recommendation(analyses)
 
         self.assertEqual(result["research_setup"], "WATCH_1H_CONFIRMATION")
         self.assertEqual(result["confirmation_1H"], "NOT_CONFIRMED")
 
-    def test_three_of_four_hourly_checks_gives_reduced_candidate(self):
+    def test_bullish_1h_pattern_confirms_even_if_last_candle_red(self):
         analyses = bullish_analysis()
-        analyses["1H"]["indicators"]["ema20"] = 100
+        analyses["1H"]["candlestick"] = {
+            "patterns": [pattern("Hammer", "BULLISH", 1, 4)],
+            "last_candle": {"bullish": False, "close_above_previous": False},
+        }
 
         result = build_multi_timeframe_recommendation(analyses)
 
-        self.assertEqual(result["research_setup"], "LONG_CANDIDATE_REDUCED")
-        self.assertEqual(result["confirmation_1H"], "PARTIAL")
-        self.assertEqual(result["setup_tier"], "REDUCED")
-        self.assertEqual(result["status"], "PROVISIONAL")
+        self.assertEqual(result["research_setup"], "LONG_CANDIDATE")
 
-    def test_sideways_macro_with_neutral_four_hour_structure_gives_reduced_candidate(self):
+    def test_fresh_bearish_1h_pattern_blocks_confirmation(self):
         analyses = bullish_analysis()
-        analyses["1D"]["market_structure"]["trend"] = "MIXED"
-        analyses["4H"]["market_structure"] = {"trend": "MIXED", "event_bias": "BEARISH"}
+        analyses["1H"]["candlestick"]["patterns"] = [pattern("Bearish Engulfing", "BEARISH", 2, 0)]
 
         result = build_multi_timeframe_recommendation(analyses)
 
-        self.assertEqual(result["macro_regime_1D"], "SIDEWAYS")
-        self.assertEqual(result["primary_direction_4H"], "BULLISH_SOFT")
-        self.assertEqual(result["research_setup"], "LONG_CANDIDATE_REDUCED")
+        self.assertEqual(result["research_setup"], "WATCH_1H_CONFIRMATION")
 
-    def test_bearish_four_hour_structure_never_passes_relaxed_rules(self):
-        analyses = bullish_analysis()
-        analyses["1D"]["market_structure"]["trend"] = "MIXED"
-        analyses["4H"]["market_structure"] = {"trend": "BEARISH", "event_bias": "BEARISH"}
-
-        result = build_multi_timeframe_recommendation(analyses)
-
-        self.assertEqual(result["research_setup"], "WAIT_MIXED")
-        self.assertEqual(result["status"], "NO_SETUP")
-
-    def test_weak_four_hour_momentum_still_blocks_reduced_tier(self):
-        analyses = bullish_analysis()
-        analyses["1D"]["market_structure"]["trend"] = "MIXED"
-        analyses["4H"]["technical_score"] = 60
-
-        result = build_multi_timeframe_recommendation(analyses)
-
-        self.assertEqual(result["research_setup"], "WAIT_MIXED")
-
-    def test_bearish_four_hour_divergence_downgrades_to_watch(self):
-        analyses = bullish_analysis()
-        analyses["4H"]["macd_divergence"] = {"direction": "BEARISH", "type": "REGULAR"}
-
-        result = build_multi_timeframe_recommendation(analyses)
-
-        self.assertEqual(result["primary_direction_4H"], "BULLISH")
-        self.assertEqual(result["research_setup"], "WATCH_DIVERGENCE")
-        divergence_check = result["checks"]["4H"][-1]
-        self.assertFalse(divergence_check["passed"])
-
-    def test_passed_model_gates_only_allow_human_review(self):
-        result = build_multi_timeframe_recommendation(
-            bullish_analysis(), backtest_validated=True, market_quality_validated=True
-        )
-
-        self.assertEqual(result["status"], "PROVISIONAL")
-        self.assertFalse(result["eligible_for_automatic_allocation"])
-
-    def test_bad_candle_quality_still_shows_simulation_but_withholds_recommendation(self):
+    def test_bad_candle_quality_withholds(self):
         analyses = bullish_analysis()
         analyses["4H"]["data_quality"]["status"] = "WARN"
 
@@ -151,7 +115,6 @@ class MultiTimeframeRecommendationTests(unittest.TestCase):
         result = build_multi_timeframe_recommendation(analyses)
 
         self.assertEqual(result["research_setup"], "INCOMPLETE_DATA")
-        self.assertEqual(result["macro_regime_1D"], "UNKNOWN")
         self.assertEqual(result["status"], "WITHHELD")
 
     def test_confirmed_bullish_macd_divergence_uses_two_lower_lows(self):

@@ -10,11 +10,17 @@ STABLECOIN_SYMBOLS = {
     "USDS", "USD1", "RLUSD", "USDP", "GUSD", "FRAX", "LUSD", "EURC", "EURT",
     "USDB", "USD0", "SUSDE", "BFUSD", "USDF", "USDTB", "USDG",
 }
+# Wrapped / staked derivatives track another asset and usually have no Kraken USD market.
+DERIVATIVE_SYMBOLS = {
+    "STETH", "WSTETH", "WETH", "WBTC", "CBBTC", "WEETH", "RETH", "METH", "BETH",
+    "CBETH", "RSETH", "EZETH", "WBETH", "LBTC", "SOLVBTC", "JITOSOL", "MSOL",
+    "BNSOL", "WBNB", "LSETH", "TBTC", "BTCB",
+}
 
 
 def _is_stablecoin(asset):
     symbol = str(asset.get("symbol") or "").strip().upper()
-    return symbol in STABLECOIN_SYMBOLS
+    return symbol in STABLECOIN_SYMBOLS or symbol in DERIVATIVE_SYMBOLS
 
 
 async def scan_coins(limit=10):
@@ -66,7 +72,7 @@ async def scan_coins(limit=10):
             continue
         if (
             recommendation.get("status") == "PROVISIONAL"
-            and recommendation.get("research_setup") in ("LONG_CANDIDATE", "LONG_CANDIDATE_REDUCED")
+            and recommendation.get("research_setup") == "LONG_CANDIDATE"
         ):
             candidates.append(item)
     allocation = build_simulated_allocation(results)

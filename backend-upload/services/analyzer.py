@@ -8,6 +8,7 @@ from providers.kraken import get_klines
 from indicators.core import add_indicators
 from engine.market_structure import analyze_market_structure
 from engine.divergence import detect_macd_divergence
+from engine.candlestick import detect_candlestick_patterns
 from engine.recommendations import build_multi_timeframe_recommendation
 from engine.scoring import (
     trend_score, momentum_score, volume_score, volatility_score,
@@ -109,7 +110,9 @@ def analyze_timeframe(rows, interval="1h"):
         detect_macd_divergence(df, left=8, right=8)
         if interval == "4h" else None
     )
+    candlestick = detect_candlestick_patterns(df, scan_last=10)
     return {
+        "candlestick": candlestick,
         "status": "PROVISIONAL",
         "valid_candles": len(df),
         "technical_score": round(score, 2),

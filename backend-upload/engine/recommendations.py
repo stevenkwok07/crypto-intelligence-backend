@@ -1,9 +1,16 @@
-"""Explainable multi-timeframe spot setup screening for provisional simulations.
+"""Candlestick-pattern spot setup screening for provisional simulations.
 
-This module identifies technical research scenarios, not returns or probabilities.
-Portfolio weights are computed separately and never authorize orders.
+4H candlestick patterns define the setup, 1H candles confirm it. EMA/RSI/MACD are
+still reported by the analyzer for context but no longer gate recommendations.
+This identifies research scenarios, not returns or probabilities.
 """
 from math import isfinite
+
+from engine.candlestick import recent_bias
+
+SETUP_WINDOW_4H = 3        # pattern must complete within the last 3 closed 4H candles
+BEARISH_WINDOW_1H = 3      # no bearish 1H pattern within the last 3 closed 1H candles
+CONFIRM_WINDOW_1H = 6      # bullish 1H pattern within the last 6 closed 1H candles
 
 
 def _number(value):
@@ -29,6 +36,7 @@ def _structure(frame):
 
 
 def _macro_regime(daily):
+    """Informational only: daily trend context shown next to the candlestick setup."""
     ind = _indicators(daily)
     structure = _structure(daily)
     ema50, ema200, close = (_number(ind.get(key)) for key in ("ema50", "ema200", "close"))
@@ -46,166 +54,107 @@ def _check(name, passed, detail):
     return {"check": name, "passed": bool(passed), "detail": detail}
 
 
+def _names(patterns):
+    return ", ".join(f"{p['name']} ({p['candles_ago']} candle lalu)" for p in patterns) or "tidak ada"
+
+
 def build_multi_timeframe_recommendation(
     analyses, backtest_validated=False, market_quality_validated=False
 ):
-    """Build a conservative 1D filter / 4H setup / 1H confirmation readout."""
+    """Build a 4H candlestick setup / 1H candlestick confirmation readout."""
     daily = _frame(analyses, "1D")
     four_hour = _frame(analyses, "4H")
     hourly = _frame(analyses, "1H")
     frames = {"1D": daily, "4H": four_hour, "1H": hourly}
-    complete = all(frame.get("status") == "PROVISIONAL" for frame in frames.values())
+    complete = all(frame.get("status") == "PROVISIONAL" for frame in (four_hour, hourly))
     data_quality = {
         timeframe: frame.get("data_quality", {}).get("status", "UNKNOWN")
         for timeframe, frame in frames.items()
     }
-    quality_ok = complete and all(status == "OK" for status in data_quality.values())
+    quality_ok = complete and all(data_quality[tf] == "OK" for tf in ("4H", "1H"))
+    macro = _macro_regime(daily) if daily.get("status") == "PROVISIONAL" else "UNKNOWN"
 
-    macro = _macro_regime(daily) if complete else "UNKNOWN"
-    h4 = _indicators(four_hour)
-    h4_structure = _structure(four_hour)
-    h4_score = _number(four_hour.get("technical_score"))
-    h4_ema20, h4_ema50, h4_ema200, h4_close = (
-        _number(h4.get(key)) for key in ("ema20", "ema50", "ema200", "close")
-    )
-    h4_rsi = _number(h4.get("rsi14"))
-    h4_macd, h4_signal, h4_hist = (
-        _number(h4.get(key)) for key in ("macd", "macd_signal", "macd_hist")
-    )
-    h4_volume = four_hour.get("volume_analysis", {})
-    h4_pressure = h4_volume.get("directional_pressure", "UNKNOWN")
-    h4_divergence = four_hour.get("macd_divergence") or {"direction": "NONE"}
-    divergence_direction = h4_divergence.get("direction", "NONE")
+    h4_candles = four_hour.get("candlestick") or {}
+    h1_candles = hourly.get("candlestick") or {}
+    h4 = recent_bias(h4_candles, SETUP_WINDOW_4H)
+    h1_bear = recent_bias(h1_candles, BEARISH_WINDOW_1H)
+    h1_confirm = recent_bias(h1_candles, CONFIRM_WINDOW_1H)
+    last_1h = h1_candles.get("last_candle") or {}
 
+    four_hour_direction = h4["bias"]  # BULLISH / BEARISH / NONE
     h4_checks = [
-        _check("Skor teknikal 4H >= 65", h4_score is not None and h4_score >= 65,
-               f"Skor 4H: {h4_score if h4_score is not None else 'tidak tersedia'}; ambang 65."),
-        _check("EMA 20 > EMA 50 > EMA 200", None not in (h4_ema20, h4_ema50, h4_ema200) and h4_ema20 > h4_ema50 > h4_ema200,
-               "Menilai susunan tren utama pada 4H."),
-        _check("Close di atas EMA 200", h4_close is not None and h4_ema200 is not None and h4_close > h4_ema200,
-               "Harga 4H perlu berada di atas tren panjangnya."),
-        _check("Struktur 4H bullish", h4_structure.get("trend") == "BULLISH",
-               f"Struktur 4H: {h4_structure.get('trend', 'UNKNOWN')} (pivot major terkonfirmasi)."),
-        _check("Event struktur major tidak bearish", h4_structure.get("event_bias") != "BEARISH",
-               f"Bias event major terakhir: {h4_structure.get('event_bias', 'UNKNOWN')} (BOS/CHoCH terkonfirmasi)."),
-        _check("MACD 4H mendukung momentum", h4_macd is not None and h4_signal is not None and h4_hist is not None and h4_macd > h4_signal and h4_hist >= 0,
-               "MACD line harus di atas signal line dan histogram tidak negatif."),
-        _check("RSI 4H berada di rentang kerja", h4_rsi is not None and 50 <= h4_rsi <= 75,
-               f"RSI 4H: {h4_rsi if h4_rsi is not None else 'tidak tersedia'}; rentang 50–75."),
-        _check("Tekanan volume mendukung atau netral", h4_pressure in ("BUYING_PRESSURE", "NEUTRAL"),
-               f"Tekanan volume: {h4_pressure}."),
-        _check("Tidak ada divergence bearish 4H", divergence_direction != "BEARISH",
-               f"Divergence MACD 4H: {divergence_direction}."),
+        _check("Pola bullish 4H dalam 3 candle terakhir", h4["bullish"],
+               f"Pola bullish 4H: {_names(h4['bullish'])}."),
+        _check("Tidak ada pola bearish 4H yang lebih baru", four_hour_direction != "BEARISH",
+               f"Pola bearish 4H: {_names(h4['bearish'])}."),
     ]
 
-    # The score is a screening feature, never interpreted as a probability.
-    # Divergence is handled as a setup downgrade below, so the underlying 4H
-    # structure remains visible as a watch scenario instead of disappearing.
-    four_hour_bullish = all(item["passed"] for item in h4_checks[:-1])
-    # Relaxed 4H: structure may be neutral (MIXED) and the last major event may be
-    # bearish, as long as trend/momentum checks (score, EMA stack, close>EMA200,
-    # MACD, RSI, volume) all pass and the major structure is not outright BEARISH.
-    h4_core_passed = all(h4_checks[i]["passed"] for i in (0, 1, 2, 5, 6, 7))
-    four_hour_soft_bullish = (
-        not four_hour_bullish and h4_core_passed
-        and h4_structure.get("trend") != "BEARISH"
-    )
-    four_hour_bearish = (
-        h4_score is not None and h4_score <= 44 and
-        h4_structure.get("trend") == "BEARISH" and
-        h4_ema20 is not None and h4_ema50 is not None and h4_ema200 is not None and
-        h4_close is not None and h4_ema20 < h4_ema50 < h4_ema200 and h4_close < h4_ema200
-    )
-    four_hour_direction = (
-        "BULLISH" if four_hour_bullish else
-        "BULLISH_SOFT" if four_hour_soft_bullish else
-        "BEARISH" if four_hour_bearish else "MIXED"
-    )
-
-    h1 = _indicators(hourly)
-    h1_ema20, h1_ema50, h1_rsi, h1_hist, h1_prev_hist, h1_rv = (
-        _number(h1.get(key)) for key in (
-            "ema20", "ema50", "rsi14", "macd_hist", "previous_macd_hist", "relative_volume"
-        )
+    no_fresh_bearish_1h = h1_bear["bias"] != "BEARISH"
+    h1_momentum = bool(h1_confirm["bullish"]) or (
+        bool(last_1h.get("bullish")) and bool(last_1h.get("close_above_previous"))
     )
     h1_checks = [
-        _check("EMA 20 1H di atas EMA 50", h1_ema20 is not None and h1_ema50 is not None and h1_ema20 > h1_ema50,
-               "Konfirmasi tren pendek 1H."),
-        _check("RSI 1H di atas 50", h1_rsi is not None and h1_rsi > 50,
-               f"RSI 1H: {h1_rsi if h1_rsi is not None else 'tidak tersedia'}."),
-        _check("Histogram MACD 1H menguat", h1_hist is not None and h1_prev_hist is not None and h1_hist >= 0 and h1_hist >= h1_prev_hist,
-               "Histogram harus non-negatif dan tidak melemah dari candle sebelumnya."),
-        _check("Relative volume 1H >= 0.70", h1_rv is not None and h1_rv >= 0.70,
-               f"Relative volume 1H: {h1_rv if h1_rv is not None else 'tidak tersedia'}; di bawah 0.70 dianggap partisipasi tipis."),
+        _check("Tidak ada pola bearish 1H terbaru", no_fresh_bearish_1h,
+               f"Pola bearish 1H (3 candle terakhir): {_names(h1_bear['bearish'])}."),
+        _check("Konfirmasi 1H: pola bullish atau candle terakhir naik", h1_momentum,
+               f"Pola bullish 1H (6 candle terakhir): {_names(h1_confirm['bullish'])}; "
+               f"candle 1H terakhir {'hijau dan close di atas candle sebelumnya' if last_1h.get('bullish') and last_1h.get('close_above_previous') else 'belum menguat'}."),
     ]
-    h1_passed_count = sum(item["passed"] for item in h1_checks)
-    hourly_confirmed = h1_passed_count == len(h1_checks)
-    # Relaxed 1H: 3 of 4 checks is enough for the reduced tier.
-    hourly_soft_confirmed = h1_passed_count >= len(h1_checks) - 1
-
-    strict_ok = macro == "BULLISH" and four_hour_bullish and hourly_confirmed
-    reduced_ok = (
-        macro in ("BULLISH", "SIDEWAYS")
-        and four_hour_direction in ("BULLISH", "BULLISH_SOFT")
-        and hourly_soft_confirmed
-    )
+    hourly_confirmed = no_fresh_bearish_1h and h1_momentum
 
     if not complete:
         setup = "INCOMPLETE_DATA"
-    elif four_hour_bearish:
+    elif four_hour_direction == "BEARISH":
         setup = "NO_LONG_SETUP"
-    elif macro == "BEARISH" and four_hour_direction in ("BULLISH", "BULLISH_SOFT"):
-        setup = "WAIT_MACRO_CONFLICT"
-    elif macro == "BEARISH":
-        setup = "NO_LONG_SETUP"
-    elif divergence_direction == "BEARISH" and four_hour_direction in ("BULLISH", "BULLISH_SOFT"):
-        setup = "WATCH_DIVERGENCE"
-    elif strict_ok:
+    elif four_hour_direction == "BULLISH" and hourly_confirmed:
         setup = "LONG_CANDIDATE"
-    elif reduced_ok:
-        setup = "LONG_CANDIDATE_REDUCED"
-    elif macro == "BULLISH" and four_hour_bullish:
+    elif four_hour_direction == "BULLISH":
         setup = "WATCH_1H_CONFIRMATION"
     else:
-        setup = "WAIT_MIXED"
+        setup = "NO_PATTERN"
 
     withheld_reasons = []
     if not complete:
-        withheld_reasons.append("Satu atau lebih timeframe tidak tersedia atau belum cukup candle.")
+        withheld_reasons.append("Timeframe 4H atau 1H tidak tersedia atau belum cukup candle.")
     if not quality_ok:
-        withheld_reasons.append("Kualitas candle belum berstatus OK di seluruh timeframe.")
+        withheld_reasons.append("Kualitas candle 4H/1H belum berstatus OK.")
     if not complete or not quality_ok:
         recommendation_status = "WITHHELD"
-    elif setup in ("LONG_CANDIDATE", "LONG_CANDIDATE_REDUCED"):
+    elif setup == "LONG_CANDIDATE":
         recommendation_status = "PROVISIONAL"
     else:
         recommendation_status = "NO_SETUP"
 
     limitations = []
     if not backtest_validated:
-        limitations.append("Aturan ini belum lulus backtest out-of-sample dengan biaya dan slippage.")
+        limitations.append("Aturan pola candlestick ini belum lulus backtest out-of-sample dengan biaya dan slippage.")
     if not market_quality_validated:
         limitations.append("Spread, depth order book, dan likuiditas belum divalidasi.")
 
+    h4_ind = _indicators(four_hour)
     return {
         "status": recommendation_status,
         "research_setup": setup,
+        "method": "CANDLESTICK_4H_1H",
         "eligible_for_simulated_allocation": recommendation_status == "PROVISIONAL",
         "eligible_for_automatic_allocation": False,
-        "roles": {"1D": "macro_filter", "4H": "primary_setup", "1H": "confirmation"},
+        "roles": {"1D": "context_only", "4H": "candlestick_setup", "1H": "candlestick_confirmation"},
         "macro_regime_1D": macro,
         "primary_direction_4H": four_hour_direction,
-        "confirmation_1H": "CONFIRMED" if hourly_confirmed else "PARTIAL" if hourly_soft_confirmed else "NOT_CONFIRMED",
-        "setup_tier": "FULL" if setup == "LONG_CANDIDATE" else "REDUCED" if setup == "LONG_CANDIDATE_REDUCED" else None,
+        "confirmation_1H": "CONFIRMED" if hourly_confirmed else "NOT_CONFIRMED",
+        "pattern_strength_4H": h4["bullish_strength"],
+        "patterns": {
+            "4H": h4["bullish"] + h4["bearish"],
+            "1H": h1_confirm["bullish"] + h1_bear["bearish"],
+        },
         "timeframe_data_quality": data_quality,
         "checks": {"4H": h4_checks, "1H": h1_checks},
         "volatility_context_4H": {
-            "atr_pct": h4.get("atr_pct"),
-            "bollinger_band_width": h4.get("bbw"),
-            "note": "ATR dan BBW memberi konteks volatilitas; belum digunakan sebagai klaim arah atau target harga.",
+            "atr_pct": h4_ind.get("atr_pct"),
+            "bollinger_band_width": h4_ind.get("bbw"),
+            "note": "ATR dipakai untuk mengecilkan bobot aset yang lebih volatil.",
         },
         "withheld_reasons": withheld_reasons,
         "limitations": limitations,
-        "method_note": "Simulasi long-only spot sementara. Skor teknikal adalah heuristik, bukan probabilitas. Nominal bukan instruksi transaksi dan strategi belum tervalidasi.",
+        "method_note": "Simulasi long-only spot berbasis pola candlestick: pola bullish 4H sebagai setup, candle 1H sebagai konfirmasi. Indikator EMA/RSI/MACD hanya konteks. Nominal bukan instruksi transaksi dan strategi belum tervalidasi.",
     }
-
