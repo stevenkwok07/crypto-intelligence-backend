@@ -67,11 +67,53 @@ class MultiTimeframeRecommendationTests(unittest.TestCase):
     def test_unconfirmed_hourly_momentum_only_generates_watch(self):
         analyses = bullish_analysis()
         analyses["1H"]["indicators"]["ema20"] = 100
+        analyses["1H"]["indicators"]["rsi14"] = 45
 
         result = build_multi_timeframe_recommendation(analyses)
 
         self.assertEqual(result["research_setup"], "WATCH_1H_CONFIRMATION")
         self.assertEqual(result["confirmation_1H"], "NOT_CONFIRMED")
+
+    def test_three_of_four_hourly_checks_gives_reduced_candidate(self):
+        analyses = bullish_analysis()
+        analyses["1H"]["indicators"]["ema20"] = 100
+
+        result = build_multi_timeframe_recommendation(analyses)
+
+        self.assertEqual(result["research_setup"], "LONG_CANDIDATE_REDUCED")
+        self.assertEqual(result["confirmation_1H"], "PARTIAL")
+        self.assertEqual(result["setup_tier"], "REDUCED")
+        self.assertEqual(result["status"], "PROVISIONAL")
+
+    def test_sideways_macro_with_neutral_four_hour_structure_gives_reduced_candidate(self):
+        analyses = bullish_analysis()
+        analyses["1D"]["market_structure"]["trend"] = "MIXED"
+        analyses["4H"]["market_structure"] = {"trend": "MIXED", "event_bias": "BEARISH"}
+
+        result = build_multi_timeframe_recommendation(analyses)
+
+        self.assertEqual(result["macro_regime_1D"], "SIDEWAYS")
+        self.assertEqual(result["primary_direction_4H"], "BULLISH_SOFT")
+        self.assertEqual(result["research_setup"], "LONG_CANDIDATE_REDUCED")
+
+    def test_bearish_four_hour_structure_never_passes_relaxed_rules(self):
+        analyses = bullish_analysis()
+        analyses["1D"]["market_structure"]["trend"] = "MIXED"
+        analyses["4H"]["market_structure"] = {"trend": "BEARISH", "event_bias": "BEARISH"}
+
+        result = build_multi_timeframe_recommendation(analyses)
+
+        self.assertEqual(result["research_setup"], "WAIT_MIXED")
+        self.assertEqual(result["status"], "NO_SETUP")
+
+    def test_weak_four_hour_momentum_still_blocks_reduced_tier(self):
+        analyses = bullish_analysis()
+        analyses["1D"]["market_structure"]["trend"] = "MIXED"
+        analyses["4H"]["technical_score"] = 60
+
+        result = build_multi_timeframe_recommendation(analyses)
+
+        self.assertEqual(result["research_setup"], "WAIT_MIXED")
 
     def test_bearish_four_hour_divergence_downgrades_to_watch(self):
         analyses = bullish_analysis()

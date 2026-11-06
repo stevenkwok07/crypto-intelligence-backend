@@ -59,12 +59,31 @@ class MarketServiceTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await scanner.scan_coins(limit=7)
 
-        get_universe.assert_awaited_once_with(7)
+        get_universe.assert_awaited_once_with(22)
         self.assertEqual(result["status"], "RESEARCH_SCAN")
         self.assertEqual(result["assets"][0]["asset"], assets[0])
         self.assertEqual(result["research_candidates"], 2)
         self.assertEqual(result["system_recommendation"]["status"], "PROVISIONAL_SIMULATION")
         self.assertLessEqual(result["system_recommendation"]["deployed_pct"], 50)
+
+    async def test_scanner_skips_stablecoins_and_keeps_requested_count(self):
+        assets = [
+            {"id": "btc-bitcoin", "symbol": "BTC"},
+            {"id": "usdt-tether", "symbol": "USDT"},
+            {"id": "eth-ethereum", "symbol": "ETH"},
+            {"id": "usdc-usd-coin", "symbol": "USDC"},
+            {"id": "sol-solana", "symbol": "SOL"},
+        ]
+        analysis = {"technical_score": 50, "recommendation": {"status": "NO_SETUP"}}
+        with (
+            patch("services.scanner.get_coin_universe", new_callable=AsyncMock, return_value={"count": 5, "assets": assets}),
+            patch("services.scanner.analyze_coin", new_callable=AsyncMock, return_value=analysis),
+        ):
+            result = await scanner.scan_coins(limit=3)
+
+        symbols = [item["asset"]["symbol"] for item in result["assets"]]
+        self.assertEqual(sorted(symbols), ["BTC", "ETH", "SOL"])
+        self.assertEqual(result["count"], 3)
 
 
 class ProviderWrapperTests(unittest.IsolatedAsyncioTestCase):

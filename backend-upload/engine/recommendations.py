@@ -102,13 +102,25 @@ def build_multi_timeframe_recommendation(
     # Divergence is handled as a setup downgrade below, so the underlying 4H
     # structure remains visible as a watch scenario instead of disappearing.
     four_hour_bullish = all(item["passed"] for item in h4_checks[:-1])
+    # Relaxed 4H: structure may be neutral (MIXED) and the last major event may be
+    # bearish, as long as trend/momentum checks (score, EMA stack, close>EMA200,
+    # MACD, RSI, volume) all pass and the major structure is not outright BEARISH.
+    h4_core_passed = all(h4_checks[i]["passed"] for i in (0, 1, 2, 5, 6, 7))
+    four_hour_soft_bullish = (
+        not four_hour_bullish and h4_core_passed
+        and h4_structure.get("trend") != "BEARISH"
+    )
     four_hour_bearish = (
         h4_score is not None and h4_score <= 44 and
         h4_structure.get("trend") == "BEARISH" and
         h4_ema20 is not None and h4_ema50 is not None and h4_ema200 is not None and
         h4_close is not None and h4_ema20 < h4_ema50 < h4_ema200 and h4_close < h4_ema200
     )
-    four_hour_direction = "BULLISH" if four_hour_bullish else "BEARISH" if four_hour_bearish else "MIXED"
+    four_hour_direction = (
+        "BULLISH" if four_hour_bullish else
+        "BULLISH_SOFT" if four_hour_soft_bullish else
+        "BEARISH" if four_hour_bearish else "MIXED"
+    )
 
     h1 = _indicators(hourly)
     h1_ema20, h1_ema50, h1_rsi, h1_hist, h1_prev_hist, h1_rv = (
@@ -126,24 +138,36 @@ def build_multi_timeframe_recommendation(
         _check("Relative volume 1H >= 0.70", h1_rv is not None and h1_rv >= 0.70,
                f"Relative volume 1H: {h1_rv if h1_rv is not None else 'tidak tersedia'}; di bawah 0.70 dianggap partisipasi tipis."),
     ]
-    hourly_confirmed = all(item["passed"] for item in h1_checks)
+    h1_passed_count = sum(item["passed"] for item in h1_checks)
+    hourly_confirmed = h1_passed_count == len(h1_checks)
+    # Relaxed 1H: 3 of 4 checks is enough for the reduced tier.
+    hourly_soft_confirmed = h1_passed_count >= len(h1_checks) - 1
+
+    strict_ok = macro == "BULLISH" and four_hour_bullish and hourly_confirmed
+    reduced_ok = (
+        macro in ("BULLISH", "SIDEWAYS")
+        and four_hour_direction in ("BULLISH", "BULLISH_SOFT")
+        and hourly_soft_confirmed
+    )
 
     if not complete:
         setup = "INCOMPLETE_DATA"
     elif four_hour_bearish:
         setup = "NO_LONG_SETUP"
-    elif macro == "BEARISH" and four_hour_direction == "BULLISH":
+    elif macro == "BEARISH" and four_hour_direction in ("BULLISH", "BULLISH_SOFT"):
         setup = "WAIT_MACRO_CONFLICT"
     elif macro == "BEARISH":
         setup = "NO_LONG_SETUP"
-    elif macro != "BULLISH" or four_hour_direction != "BULLISH":
-        setup = "WAIT_MIXED"
-    elif divergence_direction == "BEARISH":
+    elif divergence_direction == "BEARISH" and four_hour_direction in ("BULLISH", "BULLISH_SOFT"):
         setup = "WATCH_DIVERGENCE"
-    elif hourly_confirmed:
+    elif strict_ok:
         setup = "LONG_CANDIDATE"
-    else:
+    elif reduced_ok:
+        setup = "LONG_CANDIDATE_REDUCED"
+    elif macro == "BULLISH" and four_hour_bullish:
         setup = "WATCH_1H_CONFIRMATION"
+    else:
+        setup = "WAIT_MIXED"
 
     withheld_reasons = []
     if not complete:
@@ -152,7 +176,7 @@ def build_multi_timeframe_recommendation(
         withheld_reasons.append("Kualitas candle belum berstatus OK di seluruh timeframe.")
     if not complete or not quality_ok:
         recommendation_status = "WITHHELD"
-    elif setup == "LONG_CANDIDATE":
+    elif setup in ("LONG_CANDIDATE", "LONG_CANDIDATE_REDUCED"):
         recommendation_status = "PROVISIONAL"
     else:
         recommendation_status = "NO_SETUP"
@@ -171,7 +195,8 @@ def build_multi_timeframe_recommendation(
         "roles": {"1D": "macro_filter", "4H": "primary_setup", "1H": "confirmation"},
         "macro_regime_1D": macro,
         "primary_direction_4H": four_hour_direction,
-        "confirmation_1H": "CONFIRMED" if hourly_confirmed else "NOT_CONFIRMED",
+        "confirmation_1H": "CONFIRMED" if hourly_confirmed else "PARTIAL" if hourly_soft_confirmed else "NOT_CONFIRMED",
+        "setup_tier": "FULL" if setup == "LONG_CANDIDATE" else "REDUCED" if setup == "LONG_CANDIDATE_REDUCED" else None,
         "timeframe_data_quality": data_quality,
         "checks": {"4H": h4_checks, "1H": h1_checks},
         "volatility_context_4H": {

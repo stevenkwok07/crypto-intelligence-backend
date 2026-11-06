@@ -1,8 +1,15 @@
 """Small, explicitly provisional spot portfolio simulation."""
 
 
+TIER_CAP_FACTOR = {"LONG_CANDIDATE": 1.0, "LONG_CANDIDATE_REDUCED": 0.5}
+
+
 def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, per_asset_cap_pct=20.0):
-    """Allocate only among clean, fully-confirmed candidates; leave the rest in cash.
+    """Allocate only among clean candidates; leave the rest in cash.
+
+    Full-tier candidates (strict 1D/4H/1H rules) may take up to per_asset_cap_pct.
+    Reduced-tier candidates (1D sideways allowed, neutral 4H structure, 3/4 1H checks)
+    are capped at half of that.
 
     Weights use a simple heuristic: technical strength divided by 4H ATR percent.
     The score is not a probability and this sizing rule is not backtested.
@@ -11,8 +18,9 @@ def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, pe
     for item in scan_assets:
         recommendation = item.get("recommendation") or {}
         quality = recommendation.get("timeframe_data_quality") or {}
+        setup = recommendation.get("research_setup")
         if (
-            recommendation.get("research_setup") != "LONG_CANDIDATE"
+            setup not in TIER_CAP_FACTOR
             or recommendation.get("status") != "PROVISIONAL"
             or any(quality.get(tf) != "OK" for tf in ("1D", "4H", "1H"))
         ):
@@ -36,9 +44,14 @@ def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, pe
             "technical_score": round(score, 2),
             "atr_pct_4h": round(atr_pct, 4),
             "raw_weight": max(score - 60.0, 1.0) / atr_pct,
+            "tier": "FULL" if setup == "LONG_CANDIDATE" else "REDUCED",
+            "cap": float(per_asset_cap_pct) * TIER_CAP_FACTOR[setup],
         })
 
-    candidates.sort(key=lambda item: (item["technical_score"], item["raw_weight"]), reverse=True)
+    candidates.sort(
+        key=lambda item: (item["tier"] == "FULL", item["technical_score"], item["raw_weight"]),
+        reverse=True,
+    )
     candidates = candidates[:max_assets]
     if not candidates:
         return {
@@ -46,10 +59,10 @@ def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, pe
             "allocations": [],
             "deployed_pct": 0.0,
             "cash_pct": 100.0,
-            "withheld_reasons": ["Belum ada setup long dengan data 1D/4H/1H bersih dan terkonfirmasi."],
+            "withheld_reasons": ["Belum ada setup long dengan data 1D/4H/1H bersih yang lolos aturan penuh maupun reduced."],
         }
 
-    target = min(float(total_cap_pct), float(per_asset_cap_pct) * len(candidates))
+    target = min(float(total_cap_pct), sum(item["cap"] for item in candidates))
     remaining = target
     open_symbols = {item["symbol"]: item for item in candidates}
     weights = {item["symbol"]: 0.0 for item in candidates}
@@ -58,7 +71,7 @@ def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, pe
         capped = []
         for symbol, item in open_symbols.items():
             proposed = remaining * item["raw_weight"] / raw_total
-            room = float(per_asset_cap_pct) - weights[symbol]
+            room = item["cap"] - weights[symbol]
             if proposed >= room - 1e-9:
                 weights[symbol] += room
                 remaining -= room
@@ -78,6 +91,7 @@ def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, pe
             "weight_pct": round(weights[item["symbol"]], 2),
             "technical_score": item["technical_score"],
             "atr_pct_4h": item["atr_pct_4h"],
+            "tier": item["tier"],
             "status": "SIMULATION_ONLY",
         }
         for item in candidates if weights[item["symbol"]] > 0
@@ -88,7 +102,7 @@ def build_simulated_allocation(scan_assets, max_assets=3, total_cap_pct=50.0, pe
         "allocations": allocations,
         "deployed_pct": deployed,
         "cash_pct": round(100.0 - deployed, 2),
-        "method_note": "Simulasi teknikal, bukan probabilitas atau strategi tervalidasi. Maksimal 50% modal masuk crypto, maksimal 20% per aset; sisanya tetap cash. Bobot relatif memakai (skor teknikal - 60) / ATR 4H.",
+        "method_note": "Simulasi teknikal, bukan probabilitas atau strategi tervalidasi. Maksimal 50% modal masuk crypto, maksimal 20% per aset (10% untuk setup tier reduced: 1D sideways / struktur 4H netral / 1H 3 dari 4); sisanya tetap cash. Bobot relatif memakai (skor teknikal - 60) / ATR 4H.",
         "limitations": [
             "Skor teknikal bukan probabilitas keberhasilan.",
             "Aturan bobot belum diuji out-of-sample setelah biaya dan slippage.",

@@ -5,10 +5,28 @@ from services.analyzer import analyze_coin
 from engine.allocation import build_simulated_allocation
 
 
+STABLECOIN_SYMBOLS = {
+    "USDT", "USDC", "DAI", "FDUSD", "TUSD", "USDE", "USDD", "PYUSD", "BUSD",
+    "USDS", "USD1", "RLUSD", "USDP", "GUSD", "FRAX", "LUSD", "EURC", "EURT",
+    "USDB", "USD0", "SUSDE", "BFUSD", "USDF", "USDTB", "USDG",
+}
+
+
+def _is_stablecoin(asset):
+    symbol = str(asset.get("symbol") or "").strip().upper()
+    return symbol in STABLECOIN_SYMBOLS
+
+
 async def scan_coins(limit=10):
-    """Score a bounded slice of the largest listed assets for research review."""
+    """Score a bounded slice of the largest listed non-stablecoin assets for research review."""
     requested = min(max(int(limit), 1), 10)
-    universe = await get_coin_universe(requested)
+    # Fetch extra tickers so stablecoins can be skipped without shrinking the scan.
+    raw_universe = await get_coin_universe(requested + 15)
+    universe = {
+        "assets": [
+            asset for asset in raw_universe.get("assets", []) if not _is_stablecoin(asset)
+        ][:requested]
+    }
     semaphore = asyncio.Semaphore(2)
 
     async def analyze(asset):
@@ -46,7 +64,7 @@ async def scan_coins(limit=10):
             continue
         if (
             recommendation.get("status") == "PROVISIONAL"
-            and recommendation.get("research_setup") == "LONG_CANDIDATE"
+            and recommendation.get("research_setup") in ("LONG_CANDIDATE", "LONG_CANDIDATE_REDUCED")
         ):
             candidates.append(item)
     allocation = build_simulated_allocation(results)
