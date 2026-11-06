@@ -173,8 +173,26 @@ def summarize_timeframe_alignment(analyses):
     }
 
 
-async def analyze_coin(coin_id: str):
-    coin = await get_coin(coin_id)
+def _coin_from_id(coin_id: str):
+    """Derive symbol/name from a CoinPaprika-style id such as 'btc-bitcoin'."""
+    parts = str(coin_id or "").split("-", 1)
+    if len(parts) != 2 or not parts[0].isalnum() or not parts[1]:
+        return None
+    return {"symbol": parts[0].upper(), "name": parts[1].replace("-", " ").title()}
+
+
+async def analyze_coin(coin_id: str, symbol: str | None = None, name: str | None = None):
+    if symbol:
+        coin = {"symbol": symbol, "name": name or symbol}
+    else:
+        try:
+            coin = await get_coin(coin_id)
+        except Exception:
+            # CoinPaprika may rate-limit or reject the server; candles come from
+            # Kraken anyway, so fall back to the symbol encoded in the id.
+            coin = _coin_from_id(coin_id)
+            if coin is None:
+                raise
     symbol = str(coin.get("symbol", "")).upper()
     if not symbol or not symbol.isalnum():
         raise ValueError(f"Invalid asset symbol for Kraken market mapping: {symbol!r}")

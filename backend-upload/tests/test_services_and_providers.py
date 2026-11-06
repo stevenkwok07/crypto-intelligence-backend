@@ -23,6 +23,37 @@ class MarketServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["sample_market_cap_usd"], 350)
         self.assertEqual(result["source"], "CoinPaprika")
 
+    async def test_coin_universe_falls_back_when_coinpaprika_fails(self):
+        with patch("services.market.get_tickers", new_callable=AsyncMock, side_effect=RuntimeError("429")):
+            result = await market.get_coin_universe(limit=5)
+
+        self.assertTrue(result["fallback"])
+        self.assertEqual(result["count"], 5)
+        self.assertEqual(result["assets"][0]["symbol"], "BTC")
+        self.assertTrue(all(a["id"] and a["symbol"] and a["name"] for a in result["assets"]))
+
+    async def test_analyzer_falls_back_to_symbol_in_id_when_coinpaprika_fails(self):
+        from services import analyzer
+
+        with (
+            patch("services.analyzer.get_coin", new_callable=AsyncMock, side_effect=RuntimeError("429")),
+            patch("services.analyzer.get_klines", new_callable=AsyncMock, side_effect=RuntimeError("stop")) as klines,
+        ):
+            await analyzer.analyze_coin("zec-zcash")
+
+        self.assertEqual(klines.await_args_list[0].args[0], "ZECUSDT")
+
+    async def test_analyzer_skips_coinpaprika_when_symbol_given(self):
+        from services import analyzer
+
+        with (
+            patch("services.analyzer.get_coin", new_callable=AsyncMock) as get_coin,
+            patch("services.analyzer.get_klines", new_callable=AsyncMock, side_effect=RuntimeError("stop")),
+        ):
+            await analyzer.analyze_coin("eth-ethereum", symbol="ETH", name="Ethereum")
+
+        get_coin.assert_not_awaited()
+
     async def test_coin_universe_maps_quotes_and_handles_missing_fields(self):
         tickers = [{
             "id": "btc-bitcoin", "symbol": "BTC", "name": "Bitcoin", "rank": 1,

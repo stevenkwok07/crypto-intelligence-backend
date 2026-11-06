@@ -32,7 +32,9 @@ async def scan_coins(limit=10):
     async def analyze(asset):
         async with semaphore:
             try:
-                result = await analyze_coin(asset["id"])
+                result = await analyze_coin(
+                    asset["id"], symbol=asset.get("symbol"), name=asset.get("name")
+                )
                 return {
                     "asset": asset,
                     "technical_score": result.get("technical_score"),

@@ -11,8 +11,37 @@ async def get_market_overview():
         "note": "Sample based on first 100 provider tickers, not total crypto market capitalization."
     }
 
+# Used only when CoinPaprika is unreachable and nothing is cached: large, liquid
+# assets with Kraken USD markets, roughly in market-cap order.
+FALLBACK_UNIVERSE = [
+    ("btc-bitcoin", "BTC", "Bitcoin"), ("eth-ethereum", "ETH", "Ethereum"),
+    ("xrp-xrp", "XRP", "XRP"), ("sol-solana", "SOL", "Solana"),
+    ("doge-dogecoin", "DOGE", "Dogecoin"), ("ada-cardano", "ADA", "Cardano"),
+    ("trx-tron", "TRX", "TRON"), ("link-chainlink", "LINK", "Chainlink"),
+    ("xlm-stellar", "XLM", "Stellar"), ("bch-bitcoin-cash", "BCH", "Bitcoin Cash"),
+    ("avax-avalanche", "AVAX", "Avalanche"), ("ltc-litecoin", "LTC", "Litecoin"),
+    ("sui-sui", "SUI", "Sui"), ("hbar-hedera-hashgraph", "HBAR", "Hedera"),
+    ("dot-polkadot", "DOT", "Polkadot"), ("zec-zcash", "ZEC", "Zcash"),
+    ("xmr-monero", "XMR", "Monero"), ("uni-uniswap", "UNI", "Uniswap"),
+    ("aave-new", "AAVE", "Aave"), ("near-near-protocol", "NEAR", "NEAR Protocol"),
+]
+
+
+def _fallback_universe(limit):
+    assets = [
+        {"id": coin_id, "symbol": symbol, "name": name, "rank": index + 1,
+         "price_usd": None, "volume_24h": None, "market_cap": None,
+         "change_24h": None, "source": "Fallback list (CoinPaprika unavailable)"}
+        for index, (coin_id, symbol, name) in enumerate(FALLBACK_UNIVERSE[:limit])
+    ]
+    return {"count": len(assets), "assets": assets, "fallback": True}
+
+
 async def get_coin_universe(limit=100):
-    tickers = await get_tickers(limit)
+    try:
+        tickers = await get_tickers(limit)
+    except Exception:
+        return _fallback_universe(limit)
     result = []
     for item in tickers:
         usd = item.get("quotes", {}).get("USD", {})
