@@ -87,6 +87,17 @@ class MarketServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProviderWrapperTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        coinpaprika._TICKER_CACHE.update({"data": None, "fetched_at": 0.0})
+
+    async def test_coinpaprika_tickers_serves_stale_cache_when_provider_fails(self):
+        tickers = [{"id": "btc"}, {"id": "eth"}]
+        with patch("providers.coinpaprika.get_json", new_callable=AsyncMock, return_value=tickers):
+            await coinpaprika.get_tickers(2)
+        coinpaprika._TICKER_CACHE["fetched_at"] = -10_000.0
+        with patch("providers.coinpaprika.get_json", new_callable=AsyncMock, side_effect=RuntimeError("429")):
+            result = await coinpaprika.get_tickers(1)
+        self.assertEqual(result, tickers[:1])
     async def test_coinpaprika_tickers_applies_limit_and_coin_url(self):
         tickers = [{"id": "btc"}, {"id": "eth"}]
         with patch("providers.coinpaprika.get_json", new_callable=AsyncMock, return_value=tickers) as get_data:
